@@ -11,6 +11,7 @@ use Amp\Http\Server\Response;
 use DropProtocol\DropProtocolService;
 use DropProtocol\Exceptions\InvalidSessionException;
 use DropProtocol\Exceptions\SecurityViolationException;
+use DropProtocol\Amphp\Services\AmphpCookieManager;
 
 /**
  * Authentication middleware for AMPHP HTTP Server
@@ -38,22 +39,13 @@ final class DropProtocolMiddleware implements Middleware
     {
         $cookies = $this->parseCookies($request);
         
-        $_COOKIE = $cookies;
         $_SERVER['HTTP_USER_AGENT'] = $request->getHeader('user-agent') ?? '';
-        $_SERVER['REMOTE_ADDR'] = $request->getClient()->getRemoteAddress()->toString();
+        $_SERVER['REMOTE_ADDR'] = $this->getClientIp($request);
         $_SERVER['REQUEST_METHOD'] = $request->getMethod();
         
         try {
             $session = $this->dropService->validate();
-            
             $request->setAttribute(self::ATTRIBUTE_KEY, $session);
-            
-            $response = $next->handleRequest($request);
-            
-            $this->syncCookies($response);
-            
-            return $response;
-            
         } catch (InvalidSessionException | SecurityViolationException $e) {
             if ($this->required) {
                 return new Response(
@@ -65,10 +57,14 @@ final class DropProtocolMiddleware implements Middleware
                     ])
                 );
             }
-            
             $request->setAttribute(self::ATTRIBUTE_KEY, null);
-            return $next->handleRequest($request);
         }
+
+        $response = $next->handleRequest($request);
+        
+        $this->syncCookies($response);
+        
+        return $response;
     }
     
     /**
@@ -96,20 +92,63 @@ final class DropProtocolMiddleware implements Middleware
     }
     
     /**
-     * Sync PHP cookies to response headers
+     * Sync cookies to response headers
      *
      * @param Response $response
      * @return void
      */
     private function syncCookies(Response $response): void
     {
-        foreach (headers_list() as $header) {
-            if (stripos($header, 'Set-Cookie:') === 0) {
-                $cookieValue = substr($header, 12);
-                $response->setHeader('set-cookie', $cookieValue);
+        $cookieManager = $this->dropService->getCookieManager();
+        
+        if ($cookieManager instanceof AmphpCookieManager) {
+            $queuedCookies = $cookieManager->getQueuedCookies();
+            
+            foreach ($queuedCookies as $name => $data) {
+                $cookie = new \Amp\Http\Cookie\ResponseCookie(
+                    $name,
+                    $data['value'],
+                    \Amp\Http\Cookie\CookieAttributes::default()
+                        ->withPath($data['options']['path'] ?? '/')
+                        ->withDomain($data['options']['domain'] ?? '')
+                        ->withSecure($data['options']['secure'] ?? true)
+                        ->withHttpOnly($data['options']['httponly'] ?? true)
+                        ->withSameSite($data['options']['samesite'] ?? 'Strict')
+                        ->withExpiry(new \DateTimeImmutable('@' . ($data['options']['expires'] ?? time())))
+                );
+                
+                $response->setCookie($cookie);
             }
+        } else {
+            foreach (headers_list() as $header) {
+                if (stripos($header, 'Set-Cookie:') === 0) {
+                    $cookieValue = substr($header, 12);
+                    $response->setHeader('set-cookie', trim($cookieValue));
+                }
+            }
+            header_remove('Set-Cookie');
+        }
+    }
+    /**
+     * Get client IP address without port
+     *
+     * @param Request $request
+     * @return string
+     */
+    private function getClientIp(Request $request): string
+    {
+        $address = $request->getClient()->getRemoteAddress()->toString();
+        
+        $lastColon = strrpos($address, ':');
+        if ($lastColon !== false) {
+            if (str_contains($address, ']')) {
+                $ip = substr($address, 0, $lastColon);
+                return trim($ip, '[]');
+            }
+            
+            return substr($address, 0, $lastColon);
         }
         
-        header_remove('Set-Cookie');
+        return $address;
     }
 }
