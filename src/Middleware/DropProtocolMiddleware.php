@@ -38,10 +38,12 @@ final class DropProtocolMiddleware implements Middleware
     public function handleRequest(Request $request, RequestHandler $next): Response
     {
         $cookies = $this->parseCookies($request);
+        
         $_SERVER['HTTP_USER_AGENT'] = $request->getHeader('user-agent') ?? '';
         $_SERVER['REMOTE_ADDR'] = $this->getClientIp($request);
         $_SERVER['REQUEST_METHOD'] = $request->getMethod();
         
+        $previousCookies = $_COOKIE;
         $_COOKIE = $cookies;
         
         try {
@@ -49,6 +51,8 @@ final class DropProtocolMiddleware implements Middleware
             $request->setAttribute(self::ATTRIBUTE_KEY, $session);
         } catch (InvalidSessionException | SecurityViolationException $e) {
             if ($this->required) {
+                $_COOKIE = $previousCookies;
+                
                 return new Response(
                     status: HttpStatus::UNAUTHORIZED,
                     headers: ['content-type' => 'application/json'],
@@ -59,6 +63,9 @@ final class DropProtocolMiddleware implements Middleware
                 );
             }
             $request->setAttribute(self::ATTRIBUTE_KEY, null);
+        } finally {
+            // Always restore $_COOKIE to avoid polluting other requests
+            $_COOKIE = $previousCookies;
         }
 
         $response = $next->handleRequest($request);
@@ -106,23 +113,22 @@ final class DropProtocolMiddleware implements Middleware
             $queuedCookies = $cookieManager->getQueuedCookies();
             
             foreach ($queuedCookies as $name => $data) {
-                $attributes = \Amp\Http\Cookie\CookieAttributes::default()
-                    ->withPath($data['options']['path'] ?? '/')
-                    ->withDomain($data['options']['domain'] ?? '')
-                    ->withHttpOnly($data['options']['httponly'] ?? true)
-                    ->withSameSite($data['options']['samesite'] ?? 'Strict')
-                    ->withExpiry(new \DateTimeImmutable('@' . ($data['options']['expires'] ?? time())));
-
-                if ($data['options']['secure'] ?? true) {
-                    $attributes = $attributes->withSecure();
-                } else {
-                    $attributes = $attributes->withoutSecure();
-                }
-
+                $expiryTimestamp = $data['options']['expires'] ?? (time() + 1800);
+                
+                // Use !empty() to handle empty strings and false values properly
+                $secure = !empty($data['options']['secure']);
+                $httpOnly = !empty($data['options']['httponly']);
+                
                 $cookie = new \Amp\Http\Cookie\ResponseCookie(
                     $name,
                     $data['value'],
-                    $attributes
+                    \Amp\Http\Cookie\CookieAttributes::default()
+                        ->withPath($data['options']['path'] ?: '/')
+                        ->withDomain($data['options']['domain'] ?: '')
+                        ->withSecure($secure)
+                        ->withHttpOnly($httpOnly)
+                        ->withSameSite($data['options']['samesite'] ?: 'Lax')
+                        ->withExpiry(new \DateTimeImmutable('@' . $expiryTimestamp))
                 );
                 
                 $response->setCookie($cookie);
