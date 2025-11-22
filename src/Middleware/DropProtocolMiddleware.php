@@ -38,10 +38,11 @@ final class DropProtocolMiddleware implements Middleware
     public function handleRequest(Request $request, RequestHandler $next): Response
     {
         $cookies = $this->parseCookies($request);
-        
         $_SERVER['HTTP_USER_AGENT'] = $request->getHeader('user-agent') ?? '';
         $_SERVER['REMOTE_ADDR'] = $this->getClientIp($request);
         $_SERVER['REQUEST_METHOD'] = $request->getMethod();
+        
+        $_COOKIE = $cookies;
         
         try {
             $session = $this->dropService->validate();
@@ -105,16 +106,23 @@ final class DropProtocolMiddleware implements Middleware
             $queuedCookies = $cookieManager->getQueuedCookies();
             
             foreach ($queuedCookies as $name => $data) {
+                $attributes = \Amp\Http\Cookie\CookieAttributes::default()
+                    ->withPath($data['options']['path'] ?? '/')
+                    ->withDomain($data['options']['domain'] ?? '')
+                    ->withHttpOnly($data['options']['httponly'] ?? true)
+                    ->withSameSite($data['options']['samesite'] ?? 'Strict')
+                    ->withExpiry(new \DateTimeImmutable('@' . ($data['options']['expires'] ?? time())));
+
+                if ($data['options']['secure'] ?? true) {
+                    $attributes = $attributes->withSecure();
+                } else {
+                    $attributes = $attributes->withoutSecure();
+                }
+
                 $cookie = new \Amp\Http\Cookie\ResponseCookie(
                     $name,
                     $data['value'],
-                    \Amp\Http\Cookie\CookieAttributes::default()
-                        ->withPath($data['options']['path'] ?? '/')
-                        ->withDomain($data['options']['domain'] ?? '')
-                        ->withSecure($data['options']['secure'] ?? true)
-                        ->withHttpOnly($data['options']['httponly'] ?? true)
-                        ->withSameSite($data['options']['samesite'] ?? 'Strict')
-                        ->withExpiry(new \DateTimeImmutable('@' . ($data['options']['expires'] ?? time())))
+                    $attributes
                 );
                 
                 $response->setCookie($cookie);
