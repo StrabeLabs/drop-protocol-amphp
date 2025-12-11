@@ -8,6 +8,7 @@ use DropProtocol\Contracts\CookieManagerInterface;
 class AmphpCookieManager implements CookieManagerInterface
 {
     private array $queuedCookies = [];
+    private array $requestCookies = [];
 
     public function setCookie(string $name, string $value, array $options): void
     {
@@ -22,5 +23,36 @@ class AmphpCookieManager implements CookieManagerInterface
         $cookies = $this->queuedCookies;
         $this->queuedCookies = []; // Clear after reading
         return $cookies;
+    }
+
+    /**
+     * Set request cookies from incoming HTTP request
+     * 
+     * @param array $cookies Associative array of cookie name => value
+     */
+    public function setRequestCookies(array $cookies): void
+    {
+        $this->requestCookies = $cookies;
+    }
+
+    /**
+     * Get a cookie value from the incoming request
+     * 
+     * @param string $name Cookie name
+     * @return string|null Cookie value or null if not found
+     */
+    public function getRequestCookie(string $name): ?string
+    {
+        return $this->requestCookies[$name] ?? null;
+    }
+
+    /**
+     * Get all request cookies
+     * 
+     * @return array Associative array of cookie name => value
+     */
+    public function getRequestCookies(): array
+    {
+        return $this->requestCookies;
     }
 }

@@ -43,6 +43,10 @@ final class DropProtocolMiddleware implements Middleware
         $_SERVER['REMOTE_ADDR'] = $this->getClientIp($request);
         $_SERVER['REQUEST_METHOD'] = $request->getMethod();
         
+        $cookieManager = $this->dropService->getCookieManager();
+        if ($cookieManager instanceof AmphpCookieManager) {
+            $cookieManager->setRequestCookies($cookies);
+        }
         $previousCookies = $_COOKIE;
         $_COOKIE = $cookies;
         
@@ -63,12 +67,10 @@ final class DropProtocolMiddleware implements Middleware
                 );
             }
             $request->setAttribute(self::ATTRIBUTE_KEY, null);
-        } finally {
-            // Always restore $_COOKIE to avoid polluting other requests
-            $_COOKIE = $previousCookies;
         }
 
         $response = $next->handleRequest($request);
+        $_COOKIE = $previousCookies;
         
         $this->syncCookies($response);
         

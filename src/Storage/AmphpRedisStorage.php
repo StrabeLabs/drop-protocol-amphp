@@ -66,7 +66,16 @@ final class AmphpRedisStorage implements StorageInterface
     public function delete(string $sessionId): void
     {
         $key = $this->prefix . 'session:' . $sessionId;
+
+        $sessionData = $this->retrieve($sessionId);
+        
         $this->redis->delete($key);
+        
+        if ($sessionData && isset($sessionData['user_id'])) {
+            $userKey = $this->prefix . 'user:' . $sessionData['user_id'];
+            $userSet = $this->redis->getSet($userKey);
+            $userSet->remove($sessionId);
+        }
     }
 
     public function deleteUserSessions(string $userId): void
@@ -142,5 +151,34 @@ LUA;
         $userKey = $this->prefix . 'user:' . $userId;
         $userSet = $this->redis->getSet($userKey);
         return $userSet->getSize();
+    }
+
+    public function updateUserData(string $sessionId, array $userData): bool
+    {
+        $key = $this->prefix . 'session:' . $sessionId;
+
+        $sessionData = $this->retrieve($sessionId);
+        if (!$sessionData) {
+            return false;
+        }
+
+        $sessionData['data']['user_data'] = $userData;
+        $sessionData['last_activity'] = time();
+
+        $script = <<<LUA
+            if redis.call('exists', KEYS[1]) == 1 then
+                local ttl = redis.call('ttl', KEYS[1])
+                if ttl > 0 then
+                    redis.call('set', KEYS[1], ARGV[1])
+                    redis.call('expire', KEYS[1], ttl)
+                    return 1
+                end
+            end
+            return 0
+        LUA;
+
+        $result = $this->redis->eval($script, [$key], [json_encode($sessionData)]);
+
+        return $result === 1;
     }
 }
